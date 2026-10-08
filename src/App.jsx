@@ -1042,7 +1042,6 @@ function App() {
                       </span>
                       {recommendation.overview && <p className="featured-overview">{recommendation.overview}</p>}
                     </div>
-                    <span className="image-credit">A LITTLE SOMETHING FROM TMDB</span>
                   </>
                 ) : (
                   <div className="recommendation-error">

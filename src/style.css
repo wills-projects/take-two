@@ -1014,16 +1014,27 @@ body, .app-shell { background: #151216; color: #efe4df; }
 }
 @media (max-width: 600px) {
   .app-shell { padding: 0 20px; }
-  .topbar { height: 72px; }
+  .topbar { height: auto; min-height: 72px; flex-wrap: wrap; padding-top: 10px; }
   .main-nav { position: static; transform: none; margin-left: auto; margin-right: 10px; gap: 12px; }
   .nav-link { font-size: 10px; }
   .couple-chip { display: flex; }
   .couple-name, .couple-dot { display: none; }
   .avatar { width: 25px; height: 25px; }
   .avatar-two { margin-left: -8px; }
-  .user-menu-wrap { gap: 8px; }
-  .header-add-button { width: 32px; height: 32px; padding: 0; justify-content: center; }
-  .header-add-button span { display: none; }
+  .user-menu-wrap {
+    flex: 0 0 100%;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 0 12px;
+  }
+  .header-add-button {
+    width: auto;
+    height: 40px;
+    padding: 0 14px;
+    justify-content: center;
+  }
+  .header-add-button span { display: inline; }
+  .memory-sparkle { display: none; }
   .main-nav .nav-link { font-size: 9px; }
   .welcome-section { grid-template-columns: 1fr; gap: 27px; padding: 39px 0 34px; }
   .welcome-copy h1 { font-size: clamp(48px, 12vw, 62px); margin: 0 0 14px; letter-spacing: -1.9px; }
