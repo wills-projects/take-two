@@ -12,6 +12,13 @@ films are merged rather than allowing a stale page to overwrite the latest
 collection. The first successful sign-in initializes the shared record from
 the current browser's saved lists (or the starter lists if none exist).
 
+Visitors can open `/home` (or choose **Browse as a guest** on the sign-in page)
+without an account. Guest view can browse the home page, watchlist, and diary,
+and use **Surprise us**, but cannot add, edit, or remove films. The public data
+endpoint is read-only; write access still requires a signed-in account. Because
+the collection is publicly viewable, do not store private notes or other
+sensitive information in the diary.
+
 Sign-in is handled by the server and uses an HTTP-only, signed session cookie.
 User passwords, the session signing secret, and the Supabase service-role key
 must only be configured as server environment variables; they are never sent to

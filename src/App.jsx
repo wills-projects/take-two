@@ -10,7 +10,7 @@ import {
   readCurrentUser,
   signIn,
 } from './services/auth.js';
-import { loadSharedData, saveSharedData } from './services/sharedData.js';
+import { loadPublicData, loadSharedData, saveSharedData } from './services/sharedData.js';
 import { getMovieRuntimes, getRandomRecommendation, searchMovies } from './services/tmdb.js';
 
 const ratingOptions = Array.from({ length: 10 }, (_, index) => 10 - index);
@@ -163,6 +163,7 @@ function LoginPage({ onLogin, initialError = '' }) {
             Sign in <Icon name="arrow" size={15} />
           </button>
         </form>
+        <a className="guest-browse-link" href="/home">Browse as a guest <Icon name="arrow" size={14} /></a>
       </div>
       <div className="login-photo" role="img" aria-label="Will and Lynn celebrating a birthday over dessert">
         <div className="login-photo-overlay" />
@@ -173,7 +174,7 @@ function LoginPage({ onLogin, initialError = '' }) {
   );
 }
 
-function FilmCard({ film, watched, onToggle, index = 0 }) {
+function FilmCard({ film, watched, onToggle, readOnly = false, index = 0 }) {
   const [showDetails, setShowDetails] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
 
@@ -199,14 +200,14 @@ function FilmCard({ film, watched, onToggle, index = 0 }) {
               <span className="watched-mark">WATCHED TOGETHER</span>
               <span className="rating-badge">{film.rating ? `★ ${film.rating}` : '♥'}</span>
             </>
-          ) : (
+          ) : !readOnly ? (
             <span className="watchlist-card-actions">
               <button className="watchlist-heart-button" onClick={() => onToggle(film)} aria-label={`Add ${film.title} to diary`} type="button">
                 <Icon name="heart" size={21} />
               </button>
               <button className="watchlist-remove-button" onClick={() => setConfirmRemove((open) => !open)} aria-label={`Remove ${film.title} from watchlist`} aria-expanded={confirmRemove} type="button">×</button>
             </span>
-          )}
+          ) : null}
         </span>
         {!watched && confirmRemove && (
           <div className="inline-remove-confirm" role="group" aria-label={`Confirm removing ${film.title}`}>
@@ -235,15 +236,15 @@ function FilmCard({ film, watched, onToggle, index = 0 }) {
           <span className="date-label">{film.date}</span>
           <p>{film.description || film.overview || film.note || 'A little movie-night memory, saved for later.'}</p>
         </div>
-        <button className="mood-tag film-remove" onClick={() => onToggle(film)} aria-label={`Remove ${film.title} from diary`}>
+        {!readOnly && <button className="mood-tag film-remove" onClick={() => onToggle(film)} aria-label={`Remove ${film.title} from diary`}>
           Remove <span aria-hidden="true">×</span>
-        </button>
+        </button>}
       </div>}
     </article>
   );
 }
 
-function DiaryEntry({ film, onEdit, onRemove, index = 0 }) {
+function DiaryEntry({ film, onEdit, onRemove, readOnly = false, index = 0 }) {
   const [confirmRemove, setConfirmRemove] = useState(false);
   const willScore = Number(film.willRating || film.rating);
   const lynnScore = Number(film.lynnRating);
@@ -279,7 +280,7 @@ function DiaryEntry({ film, onEdit, onRemove, index = 0 }) {
           <span className="diary-rating"><small>WILL</small> ★ {film.willRating || film.rating || '—'}<small>/ 10</small></span>
           <span className="diary-rating"><small>LYNN</small> ★ {film.lynnRating || '—'}<small>/ 10</small></span>
         </div>
-        <div className="diary-entry-actions">
+        {!readOnly && <div className="diary-entry-actions">
           <button className="diary-edit" type="button" onClick={() => onEdit(film)}>Edit</button>
           <div className="diary-remove-wrap">
             <button className="diary-remove" onClick={() => setConfirmRemove((open) => !open)} aria-label={`Remove ${film.title} from diary`} aria-expanded={confirmRemove}>
@@ -295,7 +296,7 @@ function DiaryEntry({ film, onEdit, onRemove, index = 0 }) {
               </div>
             )}
           </div>
-        </div>
+        </div>}
       </div>
     </article>
   );
@@ -418,6 +419,9 @@ function App() {
   const [lynnReview, setLynnReview] = useState('');
   const [sharedMemory, setSharedMemory] = useState('');
 
+  const canViewCollection = Boolean(currentUser) || route !== '/login';
+  const isReadOnly = !currentUser;
+
   function navigate(path, replace = false) {
     if (window.location.pathname !== path) {
       window.history[replace ? 'replaceState' : 'pushState']({}, '', path);
@@ -450,8 +454,10 @@ function App() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!currentUser && route !== '/login') {
-      navigate('/login', true);
+    if (!currentUser && route === '/') {
+      navigate('/home', true);
+    } else if (!currentUser && route !== '/login' && !['/home', '/watchlist', '/diary'].includes(route)) {
+      navigate('/home', true);
     } else if (currentUser && (route === '/login' || route === '/')) {
       navigate('/home', true);
     } else if (currentUser && !['/home', '/watchlist', '/diary'].includes(route)) {
@@ -460,7 +466,7 @@ function App() {
   }, [authLoading, currentUser, route]);
 
   useEffect(() => {
-    if (!currentUser) {
+    if (!canViewCollection) {
       setSharedDataReady(false);
       setSharedDataError('');
       sharedRevision.current = 0;
@@ -476,8 +482,8 @@ function App() {
 
     async function initializeSharedData() {
       try {
-        let data = await loadSharedData();
-        if (!data.initialized) {
+        let data = currentUser ? await loadSharedData() : await loadPublicData();
+        if (currentUser && !data.initialized) {
           const migrationData = {
             films: readMovieList(watchedStorageKey, watchedMovies),
             watchlist: readMovieList(watchlistStorageKey, starterWatchlist),
@@ -502,7 +508,7 @@ function App() {
 
     initializeSharedData();
     return () => { active = false; };
-  }, [currentUser, sharedRetry]);
+  }, [canViewCollection, currentUser, sharedRetry]);
 
   useEffect(() => {
     if (!currentUser || !sharedDataReady) return undefined;
@@ -541,13 +547,21 @@ function App() {
   }, [currentUser, films, sharedDataReady, watchlist]);
 
   useEffect(() => {
-    if (!currentUser || !sharedDataReady) return undefined;
+    if (!canViewCollection || !sharedDataReady) return undefined;
     let active = true;
     const poll = window.setInterval(async () => {
       try {
-        const latest = await loadSharedData();
+        const latest = currentUser ? await loadSharedData() : await loadPublicData();
         if (!active || latest.revision <= sharedRevision.current) return;
         const remote = { films: latest.films, watchlist: latest.watchlist };
+        if (!currentUser) {
+          sharedRevision.current = latest.revision;
+          syncedSnapshot.current = remote;
+          setFilms(remote.films);
+          setWatchlist(remote.watchlist);
+          setSharedDataError('');
+          return;
+        }
         const current = { films, watchlist };
         const merged = mergeSharedData(syncedSnapshot.current, current, remote);
         sharedRevision.current = latest.revision;
@@ -563,7 +577,7 @@ function App() {
       active = false;
       window.clearInterval(poll);
     };
-  }, [currentUser, films, sharedDataReady, watchlist]);
+  }, [canViewCollection, currentUser, films, sharedDataReady, watchlist]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -607,7 +621,7 @@ function App() {
   }, [movieQuery, selectedMovie, showAddFilm]);
 
   useEffect(() => {
-    if (!currentUser || route !== '/home' || recommendation) return undefined;
+    if (!canViewCollection || route !== '/home' || recommendation) return undefined;
     let active = true;
     const excludedIds = [
       ...films.map((film) => film.tmdbId),
@@ -630,10 +644,10 @@ function App() {
 
     loadInitialRecommendation();
     return () => { active = false; };
-  }, [currentUser, route, films, watchlist, recommendation]);
+  }, [canViewCollection, currentUser, route, films, watchlist, recommendation]);
 
   useEffect(() => {
-    if (!currentUser || route !== '/home') return undefined;
+    if (!canViewCollection || route !== '/home') return undefined;
     const missingRuntimeIds = [...new Set(
       films
         .filter((film) => film.watched && !runtimeCheckedById[film.tmdbId])
@@ -670,7 +684,7 @@ function App() {
       });
 
     return () => controller.abort();
-  }, [currentUser, route, films, runtimeCheckedById]);
+  }, [canViewCollection, currentUser, route, films, runtimeCheckedById]);
 
   const activeView = route === '/watchlist' ? 'watchlist' : route === '/diary' ? 'diary' : 'home';
   const watchedCount = films.filter((film) => film.watched).length;
@@ -720,6 +734,7 @@ function App() {
   }
 
   function toggleWatched(film) {
+    if (!currentUser) return;
     if (film.watched) {
       setFilms((current) => current.filter((item) => item.tmdbId !== film.tmdbId));
       setToast('Removed from your diary.');
@@ -737,6 +752,7 @@ function App() {
 
   function saveReview(event) {
     event.preventDefault();
+    if (!currentUser) return;
     const filmBeingReviewed = editingDiaryFilm || reviewFilm;
     if (!filmBeingReviewed) return;
     const reviewedFilm = {
@@ -778,6 +794,7 @@ function App() {
   }
 
   function editDiaryFilm(film) {
+    if (!currentUser) return;
     setReviewFilm(null);
     setEditingDiaryFilm(film);
     setWillRating(normalizeRating(film.willRating || film.rating));
@@ -793,6 +810,7 @@ function App() {
   }
 
   function openAddFilm(destination) {
+    if (!currentUser) return;
     setAddDestination(destination);
     setMovieQuery('');
     setMovieResults([]);
@@ -810,6 +828,7 @@ function App() {
 
   function saveSelectedMovie(event) {
     event.preventDefault();
+    if (!currentUser) return;
     if (!selectedMovie) {
       setToast('Search for and choose a film first.');
       return;
@@ -845,11 +864,13 @@ function App() {
   }
 
   function removeFromWatchlist(film) {
+    if (!currentUser) return;
     setWatchlist((current) => current.filter((item) => item.tmdbId !== film.tmdbId));
     setToast(`${film.title} removed from your watchlist.`);
   }
 
   function selectWatchlistMovie(film) {
+    if (!currentUser) return;
     if (watchlist.some((item) => item.tmdbId === film.tmdbId)) {
       setToast(`${film.title} is already on your watchlist.`);
       return;
@@ -919,6 +940,7 @@ function App() {
   }
 
   function saveRecommendation() {
+    if (!currentUser) return;
     if (!recommendation) return;
     if (watchlist.some((film) => film.tmdbId === recommendation.tmdbId)) {
       setToast('This one is already on your watchlist.');
@@ -937,8 +959,8 @@ function App() {
     return <main className="session-loading">Opening your shared film diary…</main>;
   }
 
-  if (!currentUser || route === '/login') {
-    if (currentUser && route === '/login') return null;
+  if (route === '/login') {
+    if (currentUser) return null;
     return <LoginPage onLogin={login} initialError={authError} />;
   }
 
@@ -976,22 +998,31 @@ function App() {
             Diary <span className="nav-count">{films.length}</span>
           </a>
         </nav>
-        <div className="user-menu-wrap">
-          <button className="button button-primary header-add-button" aria-label="Add a film" onClick={() => openAddFilm('diary')}>
-            <Icon name="plus" size={15} /> <span>Add a film</span>
-          </button>
-          <button className="couple-chip" aria-expanded={showUserMenu} aria-haspopup="menu" onClick={() => setShowUserMenu((visible) => !visible)}>
-            <span className="avatar avatar-one">W</span>
-            <span className="avatar avatar-two">L</span>
-            <span className="couple-name">Will & Lynn</span>
-            <span className="couple-dot" />
-          </button>
-          {showUserMenu && (
-            <div className="user-dropdown" role="menu">
-              <span>LOGGED IN AS</span>
-              <strong>{currentUser.name}</strong>
-              <button role="menuitem" onClick={logout}>Log out <Icon name="arrow" size={14} /></button>
-            </div>
+        <div className={`user-menu-wrap${currentUser ? '' : ' guest-user-menu'}`}>
+          {currentUser ? (
+            <>
+              <button className="button button-primary header-add-button" aria-label="Add a film" onClick={() => openAddFilm('diary')}>
+                <Icon name="plus" size={15} /> <span>Add a film</span>
+              </button>
+              <button className="couple-chip" aria-expanded={showUserMenu} aria-haspopup="menu" onClick={() => setShowUserMenu((visible) => !visible)}>
+                <span className="avatar avatar-one">W</span>
+                <span className="avatar avatar-two">L</span>
+                <span className="couple-name">Will & Lynn</span>
+                <span className="couple-dot" />
+              </button>
+              {showUserMenu && (
+                <div className="user-dropdown" role="menu">
+                  <span>LOGGED IN AS</span>
+                  <strong>{currentUser.name}</strong>
+                  <button role="menuitem" onClick={logout}>Log out <Icon name="arrow" size={14} /></button>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <span className="guest-view-label">GUEST VIEW · READ ONLY</span>
+              <a className="guest-sign-in" href="/login">Sign in to edit</a>
+            </>
           )}
         </div>
       </header>
@@ -1009,10 +1040,12 @@ function App() {
                 <h1>Movie nights are<br />better <em>with you.</em></h1>
                 <p className="welcome-intro">A little home for the films we watch together —<br className="desktop-break" /> and the moments that happen between them.</p>
                 <div className="welcome-actions">
-                  <button className="button button-primary" onClick={saveRecommendation} disabled={!recommendation || recommendationLoading}>
-                    <Icon name="plus" size={16} />
-                    {recommendation && watchlist.some((film) => film.tmdbId === recommendation.tmdbId) ? 'On your watchlist' : 'Save for later'}
-                  </button>
+                  {currentUser && (
+                    <button className="button button-primary" onClick={saveRecommendation} disabled={!recommendation || recommendationLoading}>
+                      <Icon name="plus" size={16} />
+                      {recommendation && watchlist.some((film) => film.tmdbId === recommendation.tmdbId) ? 'On your watchlist' : 'Save for later'}
+                    </button>
+                  )}
                   <button className="another-button" onClick={surpriseUs} disabled={recommendationLoading}>
                     {recommendationLoading ? <span className="button-loader" /> : <Icon name="arrow" size={15} />}
                     {recommendationLoading ? 'Finding a film' : 'Surprise us'}
@@ -1078,21 +1111,34 @@ function App() {
                 </div>
               </div>
               <div className="watchlist-tools">
-                <button className="button button-primary page-add-button" onClick={() => openAddFilm('watchlist')}>
-                  <Icon name="plus" size={15} /> Add a film to your watchlist
-                </button>
+                {currentUser && (
+                  <button className="button button-primary page-add-button" onClick={() => openAddFilm('watchlist')}>
+                    <Icon name="plus" size={15} /> Add a film to your watchlist
+                  </button>
+                )}
                 <SearchBox search={search} setSearch={setSearch} />
               </div>
             </div>
             {displayedMovies.length ? (
               <div className="film-grid">
-                {displayedMovies.map((film, index) => <FilmCard key={film.tmdbId} film={film} watched={false} onToggle={(item, action) => action === 'remove-confirmed' ? removeFromWatchlist(item) : toggleWatched(item)} index={index} />)}
+                {displayedMovies.map((film, index) => (
+                  <FilmCard
+                    key={film.tmdbId}
+                    film={film}
+                    watched={false}
+                    readOnly={isReadOnly}
+                    onToggle={(item, action) => action === 'remove-confirmed'
+                      ? removeFromWatchlist(item)
+                      : toggleWatched(item)}
+                    index={index}
+                  />
+                ))}
               </div>
             ) : (
               <EmptyState
                 message={search ? 'No films found' : 'Your watchlist is a blank page.'}
                 actionLabel={!search && watchlist.length === 0 ? 'Add a film to your watchlist' : ''}
-                onAction={!search && watchlist.length === 0 ? () => openAddFilm('watchlist') : undefined}
+                onAction={currentUser && !search && watchlist.length === 0 ? () => openAddFilm('watchlist') : undefined}
               />
             )}
             <div className="bottom-note">
@@ -1119,7 +1165,7 @@ function App() {
             {displayedMovies.length ? (
               <div className="diary-list">
                 {displayedMovies.map((film, index) => (
-                  <DiaryEntry key={film.tmdbId || film.id} film={film} index={index} onEdit={editDiaryFilm} onRemove={(item) => {
+                  <DiaryEntry key={film.tmdbId || film.id} film={film} readOnly={isReadOnly} index={index} onEdit={editDiaryFilm} onRemove={(item) => {
                     setFilms((current) => current.filter((saved) => saved.tmdbId !== item.tmdbId));
                     setToast(`${item.title} removed from your diary.`);
                   }} />

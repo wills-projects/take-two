@@ -179,12 +179,12 @@ app.post('/api/auth/logout', (_request, response) => {
   response.status(204).end();
 });
 
-app.get('/api/data', requireUser, async (_request, response, next) => {
+async function readSharedCollection(_request, response, next) {
+  response.setHeader('Cache-Control', 'no-store');
   try {
     const rows = await supabaseRequest(
       'shared_collection?id=eq.take-two&select=id,revision,films,watchlist,updated_at',
     );
-    response.setHeader('Cache-Control', 'no-store');
     if (!rows.length) {
       return response.json({ initialized: false, revision: 0, films: [], watchlist: [], updatedAt: null });
     }
@@ -192,7 +192,10 @@ app.get('/api/data', requireUser, async (_request, response, next) => {
   } catch (error) {
     return next(error);
   }
-});
+}
+
+app.get('/api/data', requireUser, readSharedCollection);
+app.get('/api/public/data', readSharedCollection);
 
 app.put('/api/data', requireUser, async (request, response, next) => {
   const { expectedRevision, films, watchlist } = request.body || {};

@@ -29,6 +29,10 @@ export function loadSharedData() {
   return dataRequest('/api/data');
 }
 
+export function loadPublicData() {
+  return dataRequest('/api/public/data');
+}
+
 export function saveSharedData(data, expectedRevision) {
   return dataRequest('/api/data', {
     method: 'PUT',
