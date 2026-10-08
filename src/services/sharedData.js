@@ -11,7 +11,10 @@ async function dataRequest(path, options = {}) {
   try {
     body = await response.json();
   } catch {
-    throw new Error('The shared diary service returned an invalid response.');
+    const contentType = response.headers.get('content-type') || 'unknown content type';
+    throw new Error(
+      `The shared diary endpoint returned a non-JSON response (HTTP ${response.status}, ${contentType}). Check the Vercel API deployment and routing.`,
+    );
   }
 
   if (!response.ok && response.status !== 409) {

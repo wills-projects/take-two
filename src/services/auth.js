@@ -12,7 +12,10 @@ async function authRequest(path, options = {}) {
   try {
     body = await response.json();
   } catch {
-    throw new Error('The sign-in service returned an invalid response.');
+    const contentType = response.headers.get('content-type') || 'unknown content type';
+    throw new Error(
+      `The sign-in endpoint returned a non-JSON response (HTTP ${response.status}, ${contentType}). Check the Vercel API deployment and routing.`,
+    );
   }
 
   if (!response.ok) {
