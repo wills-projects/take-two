@@ -51,9 +51,9 @@ TMDB_API_READ_ACCESS_TOKEN=your_tmdb_read_access_token
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 SESSION_SECRET=at_least_32_random_characters
-WILL_EMAIL=williampaullee@gmail.com
+WILL_EMAIL=\\
 WILL_PASSWORD=your_private_password
-LYNN_EMAIL=xulynn19@gmail.com
+LYNN_EMAIL=\\
 LYNN_PASSWORD=your_private_password
 ```
 
@@ -70,8 +70,8 @@ server-side. Do not commit `.env`.
 
 Import the repository into Vercel with the project root set to `./`. Vite's
 build command is `npm run build`, and its output directory is `dist`; the
-Vercel project should detect these defaults. `api/[...path].js` exposes the
-existing Express API routes as a Vercel Function, while `vercel.json` routes
+Vercel project should detect these defaults. The files in `api/` expose the
+existing Express API routes as Vercel Functions, while `vercel.json` routes
 client-side pages such as `/login`, `/home`, `/watchlist`, and `/diary` to the
 Vite app.
 
