@@ -1,0 +1,24 @@
+{
+  "name": "take-two",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"node --watch server/index.js\" \"vite\"",
+    "dev:api": "node --watch server/index.js",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "dotenv": "^18.0.6",
+    "express": "^5.2.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^6.0.5"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}
