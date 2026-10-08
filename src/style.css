@@ -1281,6 +1281,28 @@ body, .app-shell { background: #151216; color: #efe4df; }
 .memory-sparkle { z-index: 0; pointer-events: none; }
 .main-nav .nav-link { font-size: 15px; font-weight: 600; }
 
+.session-loading {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: #151216;
+  color: #f2e8e2;
+  text-align: center;
+}
+.session-loading section { max-width: 540px; }
+.session-loading h1 { color: #f2e8e2; font-size: clamp(32px, 5vw, 48px); }
+.session-loading p { margin: 0 auto 22px; color: #d4c4c0; line-height: 1.7; }
+.shared-sync-warning {
+  margin: 15px 0;
+  border: 1px solid #765965;
+  border-radius: 9px;
+  background: #291f29;
+  color: #f2d7d3;
+  padding: 12px 16px;
+  font-size: 12px;
+}
+
 @media (max-width: 600px) {
   .memory-stat span { font-size: 7px; }
   .main-nav .nav-link { font-size: 11px; font-weight: 600; }

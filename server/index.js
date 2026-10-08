@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -6,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const app = express();
 const port = Number(process.env.PORT) || 3001;
+const sessionCookieName = 'take-two-session';
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const buildDirectory = path.join(projectRoot, 'dist');
 const tmdbBaseUrl = 'https://api.themoviedb.org/3';
@@ -20,7 +22,208 @@ const genres = new Map([
 ]);
 
 app.disable('x-powered-by');
-app.use(express.json({ limit: '16kb' }));
+app.use(express.json({ limit: '2mb' }));
+
+function configuredUsers() {
+  return [
+    { id: 'will', name: 'Will', email: process.env.WILL_EMAIL, password: process.env.WILL_PASSWORD },
+    { id: 'lynn', name: 'Lynn', email: process.env.LYNN_EMAIL, password: process.env.LYNN_PASSWORD },
+  ].filter((user) => user.email && user.password);
+}
+
+function sessionSecret() {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret || secret.length < 32) {
+    const error = new Error('SESSION_SECRET must be configured with at least 32 characters.');
+    error.status = 503;
+    throw error;
+  }
+  return secret;
+}
+
+function safeEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left));
+  const rightBuffer = Buffer.from(String(right));
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function signSession(user) {
+  const payload = Buffer.from(JSON.stringify({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+  })).toString('base64url');
+  const signature = createHmac('sha256', sessionSecret()).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function readSession(request) {
+  const cookie = String(request.headers.cookie || '')
+    .split(';')
+    .map((value) => value.trim())
+    .find((value) => value.startsWith(`${sessionCookieName}=`));
+  if (!cookie) return null;
+
+  try {
+    const [payload, signature] = cookie.slice(sessionCookieName.length + 1).split('.');
+    if (!payload || !signature) return null;
+    const expected = createHmac('sha256', sessionSecret()).update(payload).digest('base64url');
+    if (!safeEqual(signature, expected)) return null;
+    const session = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    const user = configuredUsers().find((candidate) => candidate.id === session.id);
+    if (!user || session.expiresAt <= Date.now()) return null;
+    return { id: user.id, name: user.name, email: user.email };
+  } catch (error) {
+    if (error.status) throw error;
+    return null;
+  }
+}
+
+function setSessionCookie(response, value, maxAge) {
+  const secure = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
+  response.setHeader(
+    'Set-Cookie',
+    `${sessionCookieName}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`,
+  );
+}
+
+function requireUser(request, response, next) {
+  response.setHeader('Cache-Control', 'no-store');
+  try {
+    const user = readSession(request);
+    if (!user) return response.status(401).json({ error: 'Please sign in to access the shared diary.' });
+    request.user = user;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
+function databaseConfiguration() {
+  const url = process.env.SUPABASE_URL?.replace(/\/$/, '');
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    const error = new Error('Shared storage is not configured. Add the Supabase URL and service role key.');
+    error.status = 503;
+    throw error;
+  }
+  return { url, key };
+}
+
+async function supabaseRequest(path, options = {}) {
+  const { url, key } = databaseConfiguration();
+  const response = await fetch(`${url}/rest/v1/${path}`, {
+    ...options,
+    headers: {
+      apikey: key,
+      authorization: `Bearer ${key}`,
+      accept: 'application/json',
+      ...(options.body ? { 'content-type': 'application/json' } : {}),
+      ...options.headers,
+    },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) {
+    const error = new Error(`Shared storage returned status ${response.status}.`);
+    error.status = response.status >= 500 ? 503 : 502;
+    throw error;
+  }
+  return response.json();
+}
+
+function sharedData(row) {
+  return {
+    initialized: true,
+    revision: Number(row.revision),
+    films: row.films,
+    watchlist: row.watchlist,
+    updatedAt: row.updated_at,
+  };
+}
+
+app.post('/api/auth/login', (request, response, next) => {
+  try {
+    const users = configuredUsers();
+    if (users.length !== 2) {
+      const error = new Error('Configure both user emails and passwords in the server environment.');
+      error.status = 503;
+      throw error;
+    }
+    const email = String(request.body?.email || '').trim().toLowerCase();
+    const password = String(request.body?.password || '');
+    const user = users.find((candidate) =>
+      safeEqual(candidate.email.toLowerCase(), email) && safeEqual(candidate.password, password),
+    );
+    if (!user) return response.status(401).json({ error: 'That email and password do not match.' });
+    setSessionCookie(response, signSession(user), 7 * 24 * 60 * 60);
+    return response.json({ user: { id: user.id, name: user.name, email: user.email } });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/auth/session', (request, response, next) => {
+  response.setHeader('Cache-Control', 'no-store');
+  try {
+    const user = readSession(request);
+    if (!user) return response.status(401).json({ error: 'No active session.' });
+    return response.json({ user });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/auth/logout', (_request, response) => {
+  setSessionCookie(response, '', 0);
+  response.status(204).end();
+});
+
+app.get('/api/data', requireUser, async (_request, response, next) => {
+  try {
+    const rows = await supabaseRequest(
+      'shared_collection?id=eq.take-two&select=id,revision,films,watchlist,updated_at',
+    );
+    response.setHeader('Cache-Control', 'no-store');
+    if (!rows.length) {
+      return response.json({ initialized: false, revision: 0, films: [], watchlist: [], updatedAt: null });
+    }
+    return response.json(sharedData(rows[0]));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.put('/api/data', requireUser, async (request, response, next) => {
+  const { expectedRevision, films, watchlist } = request.body || {};
+  if (
+    !Number.isSafeInteger(expectedRevision) ||
+    expectedRevision < 0 ||
+    !Array.isArray(films) ||
+    !Array.isArray(watchlist) ||
+    films.length > 2000 ||
+    watchlist.length > 2000
+  ) {
+    return response.status(400).json({ error: 'The shared diary data is invalid.' });
+  }
+
+  try {
+    const result = await supabaseRequest('rpc/save_take_two_shared_data', {
+      method: 'POST',
+      body: JSON.stringify({ p_films: films, p_watchlist: watchlist, p_expected_revision: expectedRevision }),
+    });
+    const data = {
+      initialized: true,
+      revision: Number(result.revision),
+      films: result.films,
+      watchlist: result.watchlist,
+      updatedAt: result.updated_at,
+    };
+    return response.status(result.saved ? 200 : 409).json(data);
+  } catch (error) {
+    return next(error);
+  }
+});
 
 function randomInteger(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -229,15 +432,19 @@ if (existsSync(path.join(buildDirectory, 'index.html'))) {
 
 app.use((error, _request, response, _next) => {
   if (error.name === 'TimeoutError' || error.name === 'AbortError') {
-    return response.status(504).json({ error: 'TMDB took too long to respond. Please try again.' });
+    return response.status(504).json({ error: 'A Take Two service took too long to respond. Please try again.' });
   }
   if (error.status) {
     return response.status(error.status).json({ error: error.message });
   }
   console.error('Take Two API error:', error);
-  return response.status(500).json({ error: 'The movie service is temporarily unavailable.' });
+  return response.status(500).json({ error: 'Take Two is temporarily unavailable.' });
 });
 
-app.listen(port, () => {
-  console.log(`Take Two API listening on http://localhost:${port}`);
-});
+export default app;
+
+if (process.env.VERCEL !== '1') {
+  app.listen(port, () => {
+    console.log(`Take Two API listening on http://localhost:${port}`);
+  });
+}

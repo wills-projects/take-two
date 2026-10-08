@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   starterWatchlist,
   watchedMovies,
@@ -6,11 +6,11 @@ import {
   watchlistStorageKey,
 } from './data/movies.js';
 import {
-  authenticate,
   clearCurrentUser,
   readCurrentUser,
-  saveCurrentUser,
+  signIn,
 } from './services/auth.js';
+import { loadSharedData, saveSharedData } from './services/sharedData.js';
 import { getMovieRuntimes, getRandomRecommendation, searchMovies } from './services/tmdb.js';
 
 const ratingOptions = Array.from({ length: 10 }, (_, index) => 10 - index);
@@ -114,20 +114,19 @@ function readMovieList(key, fallback) {
   }
 }
 
-function LoginPage({ onLogin }) {
+function LoginPage({ onLogin, initialError = '' }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(initialError);
 
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
-    const user = authenticate(email, password);
-    if (!user) {
-      setError('That email and password do not match.');
-      return;
-    }
     setError('');
-    onLogin(user);
+    try {
+      await onLogin(email, password);
+    } catch (loginError) {
+      setError(loginError.message);
+    }
   }
 
   return (
@@ -351,15 +350,50 @@ function MemoryStrip({ watchedCount, totalMinutes, missingRuntimeCount, runtimeL
   );
 }
 
+function collectionKey(film) {
+  return String(film.tmdbId || film.id);
+}
+
+function mergeCollection(base, local, remote) {
+  const baseById = new Map(base.map((film) => [collectionKey(film), film]));
+  const localById = new Map(local.map((film) => [collectionKey(film), film]));
+  const merged = new Map(remote.map((film) => [collectionKey(film), film]));
+
+  for (const [id] of baseById) {
+    if (!localById.has(id)) merged.delete(id);
+  }
+  for (const [id, film] of localById) {
+    const previous = baseById.get(id);
+    if (!previous || JSON.stringify(previous) !== JSON.stringify(film)) {
+      merged.set(id, film);
+    }
+  }
+  return [...merged.values()];
+}
+
+function mergeSharedData(base, local, remote) {
+  return {
+    films: mergeCollection(base.films, local.films, remote.films),
+    watchlist: mergeCollection(base.watchlist, local.watchlist, remote.watchlist),
+  };
+}
+
 function App() {
-  const [currentUser, setCurrentUser] = useState(readCurrentUser);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState('');
   const [route, setRoute] = useState(window.location.pathname);
-  const [films, setFilms] = useState(() => readMovieList(watchedStorageKey, watchedMovies));
+  const [films, setFilms] = useState([]);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
   const [runtimeError, setRuntimeError] = useState('');
   const [runtimeById, setRuntimeById] = useState({});
   const [runtimeCheckedById, setRuntimeCheckedById] = useState({});
-  const [watchlist, setWatchlist] = useState(() => readMovieList(watchlistStorageKey, starterWatchlist));
+  const [watchlist, setWatchlist] = useState([]);
+  const [sharedDataReady, setSharedDataReady] = useState(false);
+  const [sharedDataError, setSharedDataError] = useState('');
+  const [sharedRetry, setSharedRetry] = useState(0);
+  const sharedRevision = useRef(0);
+  const syncedSnapshot = useRef({ films: [], watchlist: [] });
   const [search, setSearch] = useState('');
   const [recommendation, setRecommendation] = useState(null);
   const [recommendationLoading, setRecommendationLoading] = useState(false);
@@ -400,6 +434,22 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    readCurrentUser()
+      .then((user) => {
+        if (active) setCurrentUser(user);
+      })
+      .catch((error) => {
+        if (active) setAuthError(error.message);
+      })
+      .finally(() => {
+        if (active) setAuthLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (authLoading) return;
     if (!currentUser && route !== '/login') {
       navigate('/login', true);
     } else if (currentUser && (route === '/login' || route === '/')) {
@@ -407,17 +457,113 @@ function App() {
     } else if (currentUser && !['/home', '/watchlist', '/diary'].includes(route)) {
       navigate('/home', true);
     }
-  }, [currentUser, route]);
+  }, [authLoading, currentUser, route]);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(watchedStorageKey, JSON.stringify(films));
-      window.localStorage.setItem(watchlistStorageKey, JSON.stringify(watchlist));
-    } catch (error) {
-      console.error('Could not save your Take Two diary in this browser.', error);
-      setToast('Your changes could not be saved on this device.');
+    if (!currentUser) {
+      setSharedDataReady(false);
+      setSharedDataError('');
+      sharedRevision.current = 0;
+      syncedSnapshot.current = { films: [], watchlist: [] };
+      setFilms([]);
+      setWatchlist([]);
+      return undefined;
     }
-  }, [films, watchlist]);
+
+    let active = true;
+    setSharedDataReady(false);
+    setSharedDataError('');
+
+    async function initializeSharedData() {
+      try {
+        let data = await loadSharedData();
+        if (!data.initialized) {
+          const migrationData = {
+            films: readMovieList(watchedStorageKey, watchedMovies),
+            watchlist: readMovieList(watchlistStorageKey, starterWatchlist),
+          };
+          data = await saveSharedData(migrationData, 0);
+          if (data.conflict) data = await loadSharedData();
+        }
+        if (!active) return;
+        const snapshot = { films: data.films, watchlist: data.watchlist };
+        sharedRevision.current = data.revision;
+        syncedSnapshot.current = snapshot;
+        setFilms(snapshot.films);
+        setWatchlist(snapshot.watchlist);
+        setSharedDataReady(true);
+      } catch (error) {
+        if (active) {
+          setSharedDataError(error.message);
+          setSharedDataReady(false);
+        }
+      }
+    }
+
+    initializeSharedData();
+    return () => { active = false; };
+  }, [currentUser, sharedRetry]);
+
+  useEffect(() => {
+    if (!currentUser || !sharedDataReady) return undefined;
+    const snapshot = { films, watchlist };
+    if (JSON.stringify(snapshot) === JSON.stringify(syncedSnapshot.current)) return undefined;
+
+    let active = true;
+    const timeout = window.setTimeout(async () => {
+      try {
+        const result = await saveSharedData(snapshot, sharedRevision.current);
+        if (!active) return;
+        if (result.conflict) {
+          const latest = { films: result.films, watchlist: result.watchlist };
+          const merged = mergeSharedData(syncedSnapshot.current, snapshot, latest);
+          sharedRevision.current = result.revision;
+          syncedSnapshot.current = latest;
+          setFilms(merged.films);
+          setWatchlist(merged.watchlist);
+          return;
+        }
+
+        sharedRevision.current = result.revision;
+        syncedSnapshot.current = snapshot;
+        setSharedDataError('');
+      } catch (error) {
+        if (active) {
+          setSharedDataError(error.message);
+          setToast(`Your changes have not synced: ${error.message}`);
+        }
+      }
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [currentUser, films, sharedDataReady, watchlist]);
+
+  useEffect(() => {
+    if (!currentUser || !sharedDataReady) return undefined;
+    let active = true;
+    const poll = window.setInterval(async () => {
+      try {
+        const latest = await loadSharedData();
+        if (!active || latest.revision <= sharedRevision.current) return;
+        const remote = { films: latest.films, watchlist: latest.watchlist };
+        const current = { films, watchlist };
+        const merged = mergeSharedData(syncedSnapshot.current, current, remote);
+        sharedRevision.current = latest.revision;
+        syncedSnapshot.current = remote;
+        setFilms(merged.films);
+        setWatchlist(merged.watchlist);
+        setSharedDataError('');
+      } catch (error) {
+        if (active) setSharedDataError(error.message);
+      }
+    }, 10000);
+    return () => {
+      active = false;
+      window.clearInterval(poll);
+    };
+  }, [currentUser, films, sharedDataReady, watchlist]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -556,25 +702,20 @@ function App() {
     );
   }, [activeView, films, search, watchlist]);
 
-  function login(user) {
-    try {
-      saveCurrentUser(user);
-      setCurrentUser(user);
-      navigate('/home', true);
-    } catch (error) {
-      console.error('Could not save the local Take Two session.', error);
-      setToast('This browser could not save your sign-in.');
-    }
+  async function login(email, password) {
+    const user = await signIn(email, password);
+    setAuthError('');
+    setCurrentUser(user);
+    navigate('/home', true);
   }
 
-  function logout() {
+  async function logout() {
     try {
-      clearCurrentUser();
+      await clearCurrentUser();
       setCurrentUser(null);
       navigate('/login', true);
     } catch (error) {
-      console.error('Could not clear the local Take Two session.', error);
-      setToast('This browser could not clear your sign-in.');
+      setToast(`Could not sign out: ${error.message}`);
     }
   }
 
@@ -792,9 +933,31 @@ function App() {
 
   const activeReviewFilm = editingDiaryFilm || reviewFilm;
 
+  if (authLoading) {
+    return <main className="session-loading">Opening your shared film diary…</main>;
+  }
+
   if (!currentUser || route === '/login') {
     if (currentUser && route === '/login') return null;
-    return <LoginPage onLogin={login} />;
+    return <LoginPage onLogin={login} initialError={authError} />;
+  }
+
+  if (!sharedDataReady) {
+    return (
+      <main className="session-loading">
+        <section>
+          <h1>{sharedDataError ? 'Your shared diary isn’t available yet.' : 'Opening your shared film diary…'}</h1>
+          {sharedDataError && (
+            <>
+              <p>{sharedDataError}</p>
+              <button className="button button-primary" type="button" onClick={() => setSharedRetry((value) => value + 1)}>
+                Try again
+              </button>
+            </>
+          )}
+        </section>
+      </main>
+    );
   }
 
   return (
@@ -834,6 +997,11 @@ function App() {
       </header>
 
       <main id="home">
+        {sharedDataError && (
+          <p className="shared-sync-warning" role="status">
+            Shared changes may not be current: {sharedDataError}
+          </p>
+        )}
         {activeView === 'home' ? (
           <>
             <section className="welcome-section">

@@ -1,41 +1,46 @@
-const users = [
-  { id: 'will', name: 'Will', email: 'williampaullee@gmail.com', password: 'test123' },
-  { id: 'lynn', name: 'Lynn', email: 'xulynn19@gmail.com', password: 'test123' },
-];
+async function authRequest(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      ...(options.body ? { 'content-type': 'application/json' } : {}),
+      ...options.headers,
+    },
+  });
 
-const sessionKey = 'take-two-user';
+  if (response.status === 204) return null;
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error('The sign-in service returned an invalid response.');
+  }
 
-export function authenticate(email, password) {
-  const user = users.find(
-    (candidate) =>
-      candidate.email.toLowerCase() === email.trim().toLowerCase() &&
-      candidate.password === password,
-  );
-
-  if (!user) return null;
-
-  return { id: user.id, name: user.name, email: user.email };
+  if (!response.ok) {
+    const error = new Error(body.error || 'The sign-in service is temporarily unavailable.');
+    error.status = response.status;
+    throw error;
+  }
+  return body;
 }
 
-export function readCurrentUser() {
+export async function signIn(email, password) {
+  const result = await authRequest('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+  return result.user;
+}
+
+export async function readCurrentUser() {
   try {
-    const stored = window.localStorage.getItem(sessionKey);
-    if (!stored) return null;
-    const user = JSON.parse(stored);
-    return users.some((candidate) => candidate.id === user.id)
-      ? { id: user.id, name: user.name, email: user.email }
-      : null;
+    const result = await authRequest('/api/auth/session');
+    return result.user;
   } catch (error) {
-    console.error('Could not read the local Take Two session.', error);
-    return null;
+    if (error.status === 401) return null;
+    throw error;
   }
 }
 
-export function saveCurrentUser(user) {
-  // Prototype-only client authentication; replace with a server session before production.
-  window.localStorage.setItem(sessionKey, JSON.stringify(user));
-}
-
 export function clearCurrentUser() {
-  window.localStorage.removeItem(sessionKey);
+  return authRequest('/api/auth/logout', { method: 'POST' });
 }
