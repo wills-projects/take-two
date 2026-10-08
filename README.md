@@ -10,12 +10,6 @@ npm install
 npm run dev
 ```
 
-The React/Vite prototype uses this browser's local storage for its sign-in state,
-watched films, and watchlist. There is no public signup. Prototype accounts:
-
-- `williampaullee@gmail.com` / `test123`
-- `xulynn19@gmail.com` / `test123`
-
 Copy `.env.example` to `.env` and add your TMDB API Read Access Token:
 
 ```sh
